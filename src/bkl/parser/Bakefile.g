@@ -56,6 +56,7 @@ tokens {
     TEMPLATE;
     SETTING;
     BASE_LIST;
+    ENVVAR_REFERENCE;
 }
 
 scope StmtScope {
@@ -215,7 +216,6 @@ expr_atom
     | LPAREN expression RPAREN                      -> expression
     ;
 
-
 // Single element of an expression. This can be either a single literal,
 // a variable reference, or a concatenation of any combination of them.
 // Note that a combination of two literals is possible too (e.g. foo"bar").
@@ -239,12 +239,17 @@ element_part
     | bool_value
     | path_anchor
     | var_reference
+    | envvar_reference
     ;
 
 var_reference
     : '$' identifier                       -> ^(VAR_REFERENCE identifier)
     | '$' LPAREN identifier RPAREN         -> ^(VAR_REFERENCE identifier)
     ;
+
+envvar_reference
+    : 'envvar(' literal ')'                -> ^(ENVVAR_REFERENCE literal)
+	;
 
 identifier: t=TEXT             -> ID[$t];
 

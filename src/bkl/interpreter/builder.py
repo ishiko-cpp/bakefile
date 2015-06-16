@@ -32,6 +32,7 @@ from ..vartypes import ListType, AnyType
 from . import analyze
 from .. import props
 
+import os
 import os.path
 
 import logging
@@ -234,7 +235,6 @@ class Builder(object, CondTrackingMixin):
         # in another scope and not used anywhere else:
         if previous_value:
             analyze.mark_variable_as_used(previous_value)
-
 
     def on_sources_or_headers(self, node):
         if node.kind == "sources":
@@ -490,6 +490,8 @@ class Builder(object, CondTrackingMixin):
             e = BoolValueExpr(ast.value)
         elif t is VarReferenceNode:
             e = ReferenceExpr(ast.var, self.context)
+        elif t is EnvVarReferenceNode:
+            e = LiteralExpr(os.environ.get(ast.var))
         elif t is ListNode:
             items = [self._build_expression(e) for e in ast.values]
             e = ListExpr(items)

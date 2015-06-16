@@ -176,6 +176,12 @@ class VarReferenceNode(Node):
                    doc="Referenced variable")
 
 
+class EnvVarReferenceNode(Node):
+    """Reference to an environment variable."""
+    var = property(lambda self: self.children[0].text,
+                   doc="Referenced environment variable")
+
+
 class AssignmentNode(Node):
     """Assignment of value to a variable."""
     lvalue = property(lambda self: self.children[0],
@@ -307,35 +313,36 @@ class _TreeAdaptor(CommonTreeAdaptor):
 
     # mapping of token types to AST node classes
     TOKENS_MAP = {
-        BakefileParser.NIL            : NilNode,
-        BakefileParser.PROGRAM        : RootNode,
-        BakefileParser.LITERAL        : LiteralNode,
-        BakefileParser.BOOLVAL        : BoolvalNode,
-        BakefileParser.PATH_ANCHOR    : PathAnchorNode,
-        BakefileParser.ID             : IdNode,
-        BakefileParser.LIST           : ListNode,
-        BakefileParser.CONCAT         : ConcatNode,
-        BakefileParser.LIST_OR_CONCAT : Node, # post-processed below
-        BakefileParser.VAR_REFERENCE  : VarReferenceNode,
-        BakefileParser.ASSIGN         : AssignmentNode,
-        BakefileParser.APPEND         : AppendNode,
-        BakefileParser.LVALUE         : LvalueNode,
-        BakefileParser.FILES_LIST     : FilesListNode,
-        BakefileParser.TARGET         : TargetNode,
-        BakefileParser.IF             : IfNode,
-        BakefileParser.OR             : OrNode,
-        BakefileParser.AND            : AndNode,
-        BakefileParser.NOT            : NotNode,
-        BakefileParser.EQUAL          : EqualNode,
-        BakefileParser.NOT_EQUAL      : NotEqualNode,
-        BakefileParser.SUBMODULE      : SubmoduleNode,
-        BakefileParser.IMPORT         : ImportNode,
-        BakefileParser.PLUGIN         : PluginNode,
-        BakefileParser.SRCDIR         : SrcdirNode,
-        BakefileParser.BASE_LIST      : BaseListNode,
-        BakefileParser.CONFIGURATION  : ConfigurationNode,
-        BakefileParser.SETTING        : SettingNode,
-        BakefileParser.TEMPLATE       : TemplateNode,
+        BakefileParser.NIL              : NilNode,
+        BakefileParser.PROGRAM          : RootNode,
+        BakefileParser.LITERAL          : LiteralNode,
+        BakefileParser.BOOLVAL          : BoolvalNode,
+        BakefileParser.PATH_ANCHOR      : PathAnchorNode,
+        BakefileParser.ID               : IdNode,
+        BakefileParser.LIST             : ListNode,
+        BakefileParser.CONCAT           : ConcatNode,
+        BakefileParser.LIST_OR_CONCAT   : Node, # post-processed below
+        BakefileParser.VAR_REFERENCE    : VarReferenceNode,
+        BakefileParser.ASSIGN           : AssignmentNode,
+        BakefileParser.APPEND           : AppendNode,
+        BakefileParser.LVALUE           : LvalueNode,
+        BakefileParser.FILES_LIST       : FilesListNode,
+        BakefileParser.TARGET           : TargetNode,
+        BakefileParser.IF               : IfNode,
+        BakefileParser.OR               : OrNode,
+        BakefileParser.AND              : AndNode,
+        BakefileParser.NOT              : NotNode,
+        BakefileParser.EQUAL            : EqualNode,
+        BakefileParser.NOT_EQUAL        : NotEqualNode,
+        BakefileParser.SUBMODULE        : SubmoduleNode,
+        BakefileParser.IMPORT           : ImportNode,
+        BakefileParser.PLUGIN           : PluginNode,
+        BakefileParser.SRCDIR           : SrcdirNode,
+        BakefileParser.BASE_LIST        : BaseListNode,
+        BakefileParser.CONFIGURATION    : ConfigurationNode,
+        BakefileParser.SETTING          : SettingNode,
+        BakefileParser.TEMPLATE         : TemplateNode,
+        BakefileParser.ENVVAR_REFERENCE : EnvVarReferenceNode,
     }
 
     def createWithPayload(self, payload):
