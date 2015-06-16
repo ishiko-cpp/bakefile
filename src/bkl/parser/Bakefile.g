@@ -148,7 +148,7 @@ submodule_stmt
 
 
 import_stmt
-    : 'import' literal ';'             -> ^(IMPORT literal)
+    : 'import' import_element ';'      -> ^(IMPORT import_element)
     ;
 
 plugin_stmt
@@ -241,6 +241,16 @@ element_part
     | var_reference
     | envvar_reference
     ;
+
+import_element
+    : import_element_part
+	| import_element_part import_element_part+    -> ^(LIST_OR_CONCAT import_element_part+)
+	;
+
+import_element_part
+    : literal
+	| var_reference
+	;
 
 var_reference
     : '$' identifier                       -> ^(VAR_REFERENCE identifier)

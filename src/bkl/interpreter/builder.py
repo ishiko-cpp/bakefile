@@ -414,7 +414,8 @@ class Builder(object, CondTrackingMixin):
                               ' (condition "%s" set at %s)' % (
                                   self.active_if_cond, self.active_if_cond.pos))
 
-        fn = os.path.relpath(os.path.join(os.path.dirname(node.pos.filename), node.file))
+        file = self._build_expression(node.file).as_py()
+        fn = os.path.relpath(os.path.join(os.path.dirname(node.pos.filename), file))
 
         module = self.context.module
         while isinstance(module, Module):

@@ -244,7 +244,7 @@ class SubmoduleNode(Node):
 
 class ImportNode(Node):
     """Textual inclusion of a file."""
-    file = property(lambda self: self.children[0].text,
+    file = property(lambda self: self.children[0],
                     doc="File to include")
 
 
