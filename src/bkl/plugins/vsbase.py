@@ -118,7 +118,7 @@ class Node(object):
         >>> n.add("LinkIncremental", target["vs-incremental-link"])
 
         Or it can take the same arguments that Node constructor takes; this is
-        equivalent to creating a Node using the same arguments and than adding
+        equivalent to creating a Node using the same arguments and then adding
         it using the first form of add():
         >>> n.add("ImportGroup", Label="PropertySheets")
         """
@@ -230,6 +230,9 @@ class XmlFormatter(object):
     #: Class for expressions formatting
     ExprFormatter = VSExprFormatter
 
+    #: Elements which are written in full form when empty.
+    elems_not_collapsed = set()
+
     def __init__(self, settings, paths_info, charset="utf-8"):
         self.charset = charset
         self.expr_formatter = self.ExprFormatter(settings, paths_info)
@@ -275,17 +278,49 @@ class XmlFormatter(object):
         arguments already use properly escaped markup; values in *attrs* are
         quoted and escaped.
         """
-        s = ["%s<%s" % (indent, name)]
+        s = "%s<%s" % (indent, name)
         if attrs:
-            for key, value in attrs:
-                s.append(' %s=%s' % (key, value))
-        if text:
-            s.append(">%s</%s>\n" % (text, name))
-        elif children_markup:
-            s.append(">\n%s%s</%s>\n" % (children_markup, indent, name))
+            # Different versions put attributes on the same or different
+            # lines, so do this in a separate method to allow overriding it.
+            s += self.format_attrs(attrs, indent)
+
+            if text or children_markup:
+                # Moreover, different versions may or not put a new line
+                # before the closing angle bracket, so we need a method here
+                # too.
+                s += self.format_end_tag_with_attrs(indent)
+            else: # An empty element
+                # Some empty elements are output as "<foo/>" while others as
+                # "<foo>\n</foo>".
+                if name not in self.elems_not_collapsed:
+                    # And different versions close an empty tag differently,
+                    # so abstract it into a separate method as well.
+                    s += self.format_end_empty_tag(indent)
+
+                    # Skip the closing tag addition below.
+                    s += "\n"
+                    return s
+
+                s += self.format_end_tag_with_attrs(indent)
+                s += "\n"
+                s += indent
         else:
-            s.append(" />\n")
-        return "".join(s)
+            if text or children_markup:
+                s += ">"
+            else:
+                s += ">\n"
+                s += indent
+
+        if text:
+            s += text
+        elif children_markup:
+            s += "\n"
+            s += children_markup
+            s += indent
+
+        s += "</%s>\n" % name
+
+        return s
 
     def format_value(self, val):
         # This trick is necessary, because 'val' may be of many types -- in
@@ -293,9 +328,35 @@ class XmlFormatter(object):
         # a specialization of int and dictionaries don't differentiate between
         # them and so @memoized format_value() would incorrectly return the
         # same value (e.g. "1") for both True and 1. The dummy 'valtype'
-        # argument disambiguates these cases, with no noticeable lost of
+        # argument disambiguates these cases, with no noticeable loss of
         # performance.
         return self._format_value(val, type(val))
+
+    def format_attrs(self, attrs, indent):
+        """
+        Returns the list containing formatted attributes.
+
+        Parameters of this method are a subset of format_node() parameters.
+        """
+        s = ''
+        for key, value in attrs:
+            s += ' %s=%s' % (key, value)
+        return s
+
+    def format_end_tag_with_attrs(self, indent):
+        """
+        Returns the string at the end of the opening tag with attributes.
+        """
+        return ">"
+
+    def format_end_empty_tag(self, indent):
+        """
+        Returns the string at the end of an empty tag.
+
+        This method only exists because MSVS 2003 doesn't insert an extra
+        space here while all the other formats do.
+        """
+        return " />"
 
     @memoized
     def _format_value(self, val, valtype):
@@ -454,7 +515,8 @@ class VSSolutionBase(object):
         included = set(x.name for x in self.all_projects())
         todo = set()
         for prj in self.all_projects():
-            todo.update(prj.dependencies)
+            if prj.dependencies:
+                todo.update(prj.dependencies)
 
         prev_count = 0
         while prev_count != len(included):
@@ -464,7 +526,8 @@ class VSSolutionBase(object):
             for todo_item in sorted(todo):
                 included.add(todo_item)
                 prj = top._get_project_by_id(todo_item)
-                todo_new.update(prj.dependencies)
+                if prj.dependencies:
+                    todo_new.update(prj.dependencies)
                 additional.append(prj)
             todo.update(todo_new)
         return additional
@@ -792,7 +855,7 @@ class VSToolsetBase(Toolset):
         """
         defs = ["WIN32"]
         defs.append("_DEBUG" if cfg.is_debug else "NDEBUG")
-        if is_program(target):
+        if is_program(target) and target["win32-subsystem"] == "console":
             defs.append("_CONSOLE")
         elif is_library(target):
             defs.append("_LIB")
@@ -905,17 +968,6 @@ class VSToolsetBase(Toolset):
                 cfg._visitor.mapping["arch"] = arch
                 yield cfg
 
-    def get_vs_warning_level(self, cfg):
-        """
-        Return numeric MSVS warning level corresponding to the warning option
-        in the specified config.
-        """
-        WARNING_LEVELS = { "no": 0,
-                           "minimal": 1,
-                           "default": 3,
-                           "all": 4 }
-        return WARNING_LEVELS[cfg["warnings"].as_py()]
-
 # Internal helper functions:
 
 @memoized
@@ -924,7 +976,17 @@ def _get_matching_project_config(cfg, prj):
     Returns best match project configuration for given solution configuration.
     """
     with error_context(prj):
-        if cfg in prj.configurations:
+        # If the project doesn't have any configurations, it means that we
+        # failed to parse it properly, presumably because it defines its
+        # configurations (and platforms, see _get_matching_project_platform()
+        # too) in a separately imported file. Ideal would be to follow the
+        # import chain, but this is not trivial, e.g. we would need to parse
+        # and evaluate MSBuild functions to find the full path of the file
+        # being imported, so for now we just optimistically assume that the
+        # project supports all solution configurations because it's the only
+        # thing we can do, the only alternative would be to refuse to use it
+        # completely.
+        if cfg in prj.configurations or not prj.configurations:
             return cfg
 
         # else: try to find a configuration closest to the given one, i.e.
@@ -985,7 +1047,9 @@ def _get_matching_project_platform(platform, prj):
     """
     Returns best matching platform in the project or None if none found.
     """
-    if platform in prj.platforms:
+    # As with the configurations above, assume that all solution platforms are
+    # supported by the project if we failed to find which ones it really has.
+    if platform in prj.platforms or not prj.platforms:
         return platform
     elif "Any CPU" in prj.platforms:
         return "Any CPU"

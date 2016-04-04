@@ -32,6 +32,16 @@ from bkl.plugins.vsbase import *
 from bkl.expr import concat, format_string
 
 
+class VS201xXmlFormatter(XmlFormatter):
+    """
+    XmlFormatter for VS 201x output.
+    """
+
+    elems_not_collapsed = set(["ImportGroup"])
+
+    def __init__(self, settings, paths_info):
+        super(VS201xXmlFormatter, self).__init__(settings, paths_info)
+
 # TODO: Put more content into this class, use it properly
 class VS2010Project(VSProjectBase):
     """
@@ -50,7 +60,10 @@ class VS2010Project(VSProjectBase):
 
 
 class VS201xToolsetBase(VSToolsetBase):
-    """Base class for VS2010, VS2012 and VS2013 toolsets."""
+    """Base class for VS2010, VS2012, VS2013 and VS2015 toolsets."""
+
+    #: XML formatting class
+    XmlFormatter = VS201xXmlFormatter
 
     #: Extension of format files
     proj_extension = "vcxproj"
@@ -163,7 +176,7 @@ class VS201xToolsetBase(VSToolsetBase):
             n = Node("ItemDefinitionGroup")
             n["Condition"] = "'$(Configuration)|$(Platform)'=='%s'" % cfg.vs_name
             n_cl = Node("ClCompile")
-            n_cl.add("WarningLevel", "Level%d" % self.get_vs_warning_level(cfg))
+            n_cl.add("WarningLevel", self.get_vs_warning_level(cfg))
             if cfg.is_debug:
                 n_cl.add("Optimization", "Disabled")
             else:
@@ -264,39 +277,40 @@ class VS201xToolsetBase(VSToolsetBase):
             root.add(n)
 
         # Source files:
-        items = Node("ItemGroup")
-        root.add(items)
-        cl_files_map = bkl.compilers.disambiguate_intermediate_file_names(cl_files)
-        for sfile in cl_files:
-            if sfile["compile-commands"]:
-                self._add_custom_build_file(items, sfile)
-            else:
-                ext = sfile.filename.get_extension()
-                # TODO: share this code with VS200x
-                # FIXME: make this more solid
-                if ext in ['cpp', 'cxx', 'cc', 'c']:
-                    n_cl_compile = Node("ClCompile", Include=sfile.filename)
+        if cl_files:
+            items = Node("ItemGroup")
+            root.add(items)
+            cl_files_map = bkl.compilers.disambiguate_intermediate_file_names(cl_files)
+            for sfile in cl_files:
+                if sfile["compile-commands"]:
+                    self._add_custom_build_file(items, sfile)
                 else:
-                    # FIXME: handle both compilation into cpp and c files
-                    genfiletype = bkl.compilers.CxxFileType.get()
-                    genname = bkl.expr.PathExpr([bkl.expr.LiteralExpr(sfile.filename.get_basename())],
-                                                bkl.expr.ANCHOR_BUILDDIR,
-                                                pos=sfile.filename.pos).change_extension("cpp")
+                    ext = sfile.filename.get_extension()
+                    # TODO: share this code with VS200x
+                    # FIXME: make this more solid
+                    if ext in ['cpp', 'cxx', 'cc', 'c']:
+                        n_cl_compile = Node("ClCompile", Include=sfile.filename)
+                    else:
+                        # FIXME: handle both compilation into cpp and c files
+                        genfiletype = bkl.compilers.CxxFileType.get()
+                        genname = bkl.expr.PathExpr([bkl.expr.LiteralExpr(sfile.filename.get_basename())],
+                                                    bkl.expr.ANCHOR_BUILDDIR,
+                                                    pos=sfile.filename.pos).change_extension("cpp")
 
-                    ft_from = bkl.compilers.get_file_type(ext)
-                    compiler = bkl.compilers.get_compiler(self, ft_from, genfiletype)
+                        ft_from = bkl.compilers.get_file_type(ext)
+                        compiler = bkl.compilers.get_compiler(self, ft_from, genfiletype)
 
-                    customBuild = Node("CustomBuild", Include=sfile.filename)
-                    customBuild.add("Command", VSList("\n", compiler.commands(self, target, sfile.filename, genname)))
-                    customBuild.add("Outputs", genname)
-                    items.add(customBuild)
-                    n_cl_compile = Node("ClCompile", Include=genname)
-                # Handle files with custom object name:
-                if sfile in cl_files_map:
-                    n_cl_compile.add("ObjectFileName",
-                                     concat("$(IntDir)\\", cl_files_map[sfile], ".obj"))
-                self._add_per_file_options(sfile, n_cl_compile)
-                items.add(n_cl_compile)
+                        customBuild = Node("CustomBuild", Include=sfile.filename)
+                        customBuild.add("Command", VSList("\n", compiler.commands(self, target, sfile.filename, genname)))
+                        customBuild.add("Outputs", genname)
+                        items.add(customBuild)
+                        n_cl_compile = Node("ClCompile", Include=genname)
+                    # Handle files with custom object name:
+                    if sfile in cl_files_map:
+                        n_cl_compile.add("ObjectFileName",
+                                         concat("$(IntDir)\\", cl_files_map[sfile], ".obj"))
+                    self._add_per_file_options(sfile, n_cl_compile)
+                    items.add(n_cl_compile)
 
         # Headers files:
         if target.headers:
@@ -348,7 +362,7 @@ class VS201xToolsetBase(VSToolsetBase):
         filename = project.projectfile.as_native_path_for_output(target)
         paths_info = self.get_project_paths_info(target, project)
 
-        formatter = XmlFormatter(target.project.settings, paths_info)
+        formatter = self.XmlFormatter(target.project.settings, paths_info)
         f = OutputFile(filename, EOL_WINDOWS,
                        creator=self, create_for=target)
         f.write(codecs.BOM_UTF8)
@@ -381,6 +395,9 @@ class VS201xToolsetBase(VSToolsetBase):
 
 
     def _get_references(self, target):
+        if not target["deps"]:
+            return None
+
         # In addition to explicit dependencies, add dependencies of static libraries
         # linked into target to the list of references.
         prj = target.project
@@ -477,6 +494,20 @@ class VS201xToolsetBase(VSToolsetBase):
         for c in configs_iter:
             for a in archs_list:
                 yield (c, a)
+
+
+    def get_vs_warning_level(self, cfg):
+        """
+        Return MSVS warning level option value corresponding to the warning
+        option in the specified config.
+        """
+        WARNING_LEVELS = { "no": "TurnOffAllWarnings",
+                           "minimal": "Level1",
+                           "default": "Level3",
+                           "all": "Level4",
+                           "max": "EnableAllWarnings",
+        }
+        return WARNING_LEVELS[cfg["warnings"].as_py()]
 
 
 
@@ -623,3 +654,51 @@ class VS2013Toolset(VS201xToolsetBase):
     tools_version = "12.0"
     Solution = VS2013Solution
     Project = VS2013Project
+
+
+class VS2015Solution(VS2010Solution):
+    format_version = "12.00"
+    # Unlike the previous versions, this one uses the numeric version and not
+    # the year in the comment in the solution files.
+    human_version = "14"
+
+    def write_header(self, file):
+        super(VS2015Solution, self).write_header(file)
+        file.write("VisualStudioVersion = 14.0.23107.0\n")
+        file.write("MinimumVisualStudioVersion = 10.0.40219.1\n")
+
+
+class VS2015Project(VS2010Project):
+    version = 14
+
+
+class VS2015Toolset(VS201xToolsetBase):
+    """
+    Visual Studio 2015.
+
+
+    Special properties
+    ------------------
+    This toolset supports the same special properties that
+    :ref:`ref_toolset_vs2010`. The only difference is that they are prefixed
+    with ``vs2015.option.`` instead of ``vs2010.option.``, i.e. the nodes are:
+
+      - ``vs2015.option.Globals.*``
+      - ``vs2015.option.Configuration.*``
+      - ``vs2015.option.*`` (this is the unnamed ``PropertyGroup`` with
+        global settings such as ``TargetName``)
+      - ``vs2015.option.ClCompile.*``
+      - ``vs2015.option.ResourceCompile.*``
+      - ``vs2015.option.Link.*``
+      - ``vs2015.option.Lib.*``
+
+    """
+
+    name = "vs2015"
+
+    version = 14
+    proj_versions = [10, 11, 12, 14]
+    platform_toolset = "v140"
+    tools_version = "14.0"
+    Solution = VS2015Solution
+    Project = VS2015Project
