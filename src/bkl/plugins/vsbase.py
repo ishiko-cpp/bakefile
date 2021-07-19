@@ -137,6 +137,30 @@ class Node(object):
                     return
         assert 0, "add() is confused: what are you trying to do?"
 
+    def add_with_default(self, name, value):
+        """
+        Add an element with the given value and the default element value.
+
+        This produces output of the form "<Foo>our-value-of-foo;%(Foo)</Foo>"
+        in the generated project file, which is desirable as it preserves any
+        changes to this property in the previously included property sheets.
+
+        Additionally, if the value is empty, this method doesn't do anything
+        at all as using empty value followed by the current value of the
+        property is equivalent to doing nothing in any case.
+        """
+        if not value:
+            # If there is no value at all, there is no need to add anything.
+            return
+
+        if isinstance(value, VSList):
+            value_with_def = VSList(value.list_sep, value.items)
+        else:
+            value_with_def = list(value)
+        value_with_def.append('%%(%s)' % name)
+
+        self.children.append((name, value_with_def))
+
     def add_or_replace(self, name, value):
         """
         Add a child to this node, replacing the existing child with the same
@@ -442,8 +466,8 @@ class VSSolutionBase(object):
     #: ...and in the comment under it (2005 and up)
     human_version = None
 
-    def __init__(self, toolset, module):
-        slnfile = module["%s.solutionfile" % toolset.name].as_native_path_for_output(module)
+    def __init__(self, toolset, module, slnprop):
+        slnfile = slnprop.as_native_path_for_output(module)
         self.name = module.name
         # unlike targets, modules' names aren't globally unique, so use the fully qualified name, which is
         self.guid = GUID(NAMESPACE_SLN_GROUP, module.project.top_module.name, module.fully_qualified_name)
@@ -456,12 +480,8 @@ class VSSolutionBase(object):
                                     builddir=None,
                                     model=module)
         self.formatter = VSExprFormatter(module.project.settings, paths_info)
-        self.generate_outf = module["%s.generate-solution" % toolset.name]
-        if self.generate_outf:
-            self.outf = OutputFile(slnfile, EOL_WINDOWS,
-                                   creator=toolset, create_for=module)
-        else:
-            self.outf = None
+        self.outf = OutputFile(slnfile, EOL_WINDOWS,
+                               creator=toolset, create_for=module)
 
     def add_project(self, prj):
         """
@@ -561,8 +581,6 @@ class VSSolutionBase(object):
 
     def write(self):
         """Writes the solution to the file."""
-        if not self.generate_outf:
-            return # silently do nothing
         outf = self.outf
         self.write_header(outf)
 
@@ -688,7 +706,7 @@ def _default_solution_name(module):
 
 def _project_name_from_solution(toolset_class, target):
     """``$(id).vcxproj`` in the same directory as the ``.sln`` file"""
-    sln = target["%s.solutionfile" % toolset_class.name]
+    sln = toolset_class.get_solutionfile_path(target)
     proj_ext = toolset_class.proj_extension
     return bkl.expr.PathExpr(sln.components[:-1] +
                              [bkl.expr.LiteralExpr("%s.%s" % (target.name, proj_ext))],
@@ -720,7 +738,7 @@ class VSToolsetBase(Toolset):
     loadable_module_extension = "dll"
 
     @classmethod
-    def properties_target_vsbase(cls):
+    def vsbase_target_properties(cls):
         yield Property("%s.projectfile" % cls.name,
                        type=PathType(),
                        default=update_wrapper(partial(_project_name_from_solution, cls), _project_name_from_solution),
@@ -751,6 +769,13 @@ class VSToolsetBase(Toolset):
                            submodules with only a single target.
                            """)
 
+    @classmethod
+    def get_solutionfile_path(cls, target):
+        """
+        Get the value of the ``solutionfile`` property for the toolset.
+        """
+        return target["%s.solutionfile" % cls.name]
+
 
     def generate(self, project):
         # generate vcxproj files and prepare solutions
@@ -763,12 +788,19 @@ class VSToolsetBase(Toolset):
             for sub in m.submodules:
                 m.solution.add_subsolution(sub.solution)
         for m in project.modules:
-            m.solution.write()
+            if m.generate_solution:
+                m.solution.write()
 
+
+    def create_solution(self, module):
+        return self.Solution(self, module, module["%s.solutionfile" % self.name])
 
     def gen_for_module(self, module):
-        # attach VS2010-specific data to the model
-        module.solution = self.Solution(self, module)
+        # Note that we need to create the solution object even if we're not
+        # generating the solution file, to make projects included in this
+        # solution part of the global projects tree.
+        module.generate_solution = module["%s.generate-solution" % self.name]
+        module.solution = self.create_solution(module)
 
         for t in module.targets.itervalues():
             with error_context(t):

@@ -1,19 +1,29 @@
-v1.2.6 (????-??-??)
+v1.2.7 (2021-??-??)
+
+Enhancements
+------------
+
+- Automatically create output directory in "gnu" toolset if necessary.
+
+v1.2.6 (2020-10-17)
 ===================
 
 New Features
 ------------
 
-- Add MSVS 2015 and 2017 toolsets support.
+- Add MSVS 2015, 2017 and 2019 toolsets support.
+- Add "msvs" version-independent MSVS toolset.
 - Allow specifying configurations/platforms for external projects.
 - Support including user-defined property sheets in MSVS 201x toolsets.
 - Add "inputs" property for action targets.
+- Add "allow-undefined" target property.
 
 Bug fixes
 ---------
 
 - Changing variable appearing in "source" statement of a base template
   from the derived target now works as expected.
+- Respect default value of "AdditionalIncludeDirectories" in MSVS projects.
 - Simplify paths involving $(builddir) in the "gnu" toolset output.
 - Generate correct warning options for "suncc" backend.
 - Fix linking shared libraries with Sun toolset, use "-lc" explicitly.

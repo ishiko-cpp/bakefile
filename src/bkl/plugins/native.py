@@ -144,7 +144,7 @@ class NativeCompiledType(TargetType):
                      executables that use the library.
                      """),
             Property("archs",
-                 type=ListType(EnumType("architecture", ["x86", "x86_64"])),
+                 type=ListType(EnumType("architecture", ["arm64", "x86", "x86_64"])),
                  default=NullExpr(),
                  inheritable=True,
                  doc="""
@@ -202,6 +202,24 @@ class NativeCompiledType(TargetType):
                      By default, libraries (both shared and static, because the
                      latter could be linked into a shared lib too) are linked
                      with -fPIC and executables are not.
+                     """),
+            Property("allow-undefined",
+                 type=BoolType(),
+                 default=False,
+                 inheritable=True,
+                 doc="""
+                     Allow undefined symbols when linking.
+
+                     By default, all symbols must be defined when linking the
+                     target (even if it is a shared library, for which
+                     undefined symbols are traditionally allowed by default
+                     under Unix), however loadable modules may need to contain
+                     references to symbols in the program loading them that
+                     can't be resolved at the link time and for them this
+                     property may need to be set to ``false``.
+
+                     Note that currently this property is only supported by
+                     "gnu" toolset and is silently ignored by all the others.
                      """),
             Property("multithreading",
                  type=BoolType(),

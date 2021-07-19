@@ -61,7 +61,7 @@ class VS2010Project(VSProjectBase):
 
 
 class VS201xToolsetBase(VSToolsetBase):
-    """Base class for VS2010, VS2012, VS2013, VS2015 and VS2017 toolsets."""
+    """Base class for VS2010, VS2012, VS2013, VS2015, VS2017 and VS2019 toolsets."""
 
     #: XML formatting class
     XmlFormatter = VS201xXmlFormatter
@@ -75,11 +75,11 @@ class VS201xToolsetBase(VSToolsetBase):
     #: ToolsVersion property
     tools_version = "4.0"
 
-    properties_target_vs201x = [
+    vs201x_target_properties = [
             Property("vs.property-sheets",
                      type=ListType(PathType()),
                      default=bkl.expr.NullExpr(),
-                     inheritable=False,
+                     inheritable=True,
                      doc="""
                          May contain paths to one or more property sheets files
                          that will be imported from the generated project if they
@@ -89,9 +89,9 @@ class VS201xToolsetBase(VSToolsetBase):
 
     @classmethod
     def properties_target(cls):
-        for p in cls.properties_target_vsbase():
+        for p in cls.vsbase_target_properties():
             yield p
-        for p in cls.properties_target_vs201x:
+        for p in cls.vs201x_target_properties:
             yield p
 
     def gen_for_target(self, target, project):
@@ -150,7 +150,23 @@ class VS201xToolsetBase(VSToolsetBase):
             else:
                 n.add("CharacterSet", "MultiByte")
             if self.platform_toolset:
-                n.add("PlatformToolset", self.platform_toolset)
+                # Special case of "msvs" toolset, which means to set the
+                # platform toolset appropriately depending on the MSVS version.
+                if self.platform_toolset == 'msvs':
+                    for v in all_versions:
+                        toolset_ver = all_versions[v]
+
+                        # This happens for MSVS 2010 which doesn't specify the
+                        # toolset explicitly.
+                        if not toolset_ver.platform_toolset:
+                            continue
+
+                        node_toolset = Node("PlatformToolset", toolset_ver.platform_toolset)
+                        node_toolset["Condition"] = "'$(VisualStudioVersion)'=='%s'" % toolset_ver.version
+                        n.add(node_toolset)
+                else:
+                    n.add("PlatformToolset", self.platform_toolset)
+
             self._add_extra_options_to_node(cfg, n)
             root.add(n)
 
@@ -215,11 +231,10 @@ class VS201xToolsetBase(VSToolsetBase):
                 n_cl.add("FunctionLevelLinking", True)
                 n_cl.add("IntrinsicFunctions", True)
             std_defs = self.get_std_defines(target, cfg)
-            std_defs.append("%(PreprocessorDefinitions)")
-            n_cl.add("PreprocessorDefinitions", list(cfg["defines"]) + std_defs)
+            n_cl.add_with_default("PreprocessorDefinitions", list(cfg["defines"]) + std_defs)
             n_cl.add("MultiProcessorCompilation", True)
             n_cl.add("MinimalRebuild", False)
-            n_cl.add("AdditionalIncludeDirectories", cfg["includedirs"])
+            n_cl.add_with_default("AdditionalIncludeDirectories", cfg["includedirs"])
 
             crt = "MultiThreaded"
             if cfg.is_debug:
@@ -235,16 +250,14 @@ class VS201xToolsetBase(VSToolsetBase):
             all_cflags = VSList(" ", cfg["compiler-options"],
                                      cfg["c-compiler-options"],
                                      cfg["cxx-compiler-options"])
-            if all_cflags:
-                all_cflags.append("%(AdditionalOptions)")
-                n_cl.add("AdditionalOptions", all_cflags)
+            n_cl.add_with_default("AdditionalOptions", all_cflags)
 
             self._add_extra_options_to_node(cfg, n_cl)
             n.add(n_cl)
 
             if rc_files:
                 n_res = Node("ResourceCompile")
-                n_res.add("AdditionalIncludeDirectories", cfg["includedirs"])
+                n_res.add_with_default("AdditionalIncludeDirectories", cfg["includedirs"])
                 std_defs = []
                 if cfg["win32-unicode"]:
                     std_defs.append("_UNICODE")
@@ -253,14 +266,13 @@ class VS201xToolsetBase(VSToolsetBase):
                 # the explanation of why do we do this even though the native
                 # projects don't define _DEBUG/NDEBUG for the RC files.
                 std_defs.append("_DEBUG" if cfg.is_debug else "NDEBUG")
-                std_defs.append("%(PreprocessorDefinitions)")
-                n_res.add("PreprocessorDefinitions", list(cfg["defines"]) + std_defs)
+                n_res.add_with_default("PreprocessorDefinitions", list(cfg["defines"]) + std_defs)
                 self._add_extra_options_to_node(cfg, n_res)
                 n.add(n_res)
 
             if idl_files:
                 n_idl = Node("Midl")
-                n_idl.add("AdditionalIncludeDirectories", cfg["includedirs"])
+                n_idl.add_with_default("AdditionalIncludeDirectories", cfg["includedirs"])
                 self._add_extra_options_to_node(cfg, n_idl)
                 n.add(n_idl)
 
@@ -275,24 +287,19 @@ class VS201xToolsetBase(VSToolsetBase):
                 n_link.add("OptimizeReferences", True)
             if not is_library(target):
                 libdirs = VSList(";", target.type.get_libdirs(cfg))
-                if libdirs:
-                    libdirs.append("%(AdditionalLibraryDirectories)")
-                    n_link.add("AdditionalLibraryDirectories", libdirs)
+                n_link.add_with_default("AdditionalLibraryDirectories", libdirs)
                 ldflags = VSList(" ", target.type.get_link_options(cfg))
-                if ldflags:
-                    ldflags.append("%(AdditionalOptions)")
-                    n_link.add("AdditionalOptions", ldflags)
+                n_link.add_with_default("AdditionalOptions", ldflags)
                 libs = target.type.get_ldlibs(cfg)
                 if libs:
                     addlibs = VSList(";", ("%s.lib" % x.as_py() for x in libs if x))
-                    addlibs.append("%(AdditionalDependencies)")
                     if is_library(target):
                         n_lib = Node("Lib")
                         self._add_extra_options_to_node(cfg, n_lib)
                         n.add(n_lib)
-                        n_lib.add("AdditionalDependencies", addlibs)
+                        n_lib.add_with_default("AdditionalDependencies", addlibs)
                     else:
-                        n_link.add("AdditionalDependencies", addlibs)
+                        n_link.add_with_default("AdditionalDependencies", addlibs)
             self._add_extra_options_to_node(cfg, n_link)
             n.add(n_link)
 
@@ -600,6 +607,7 @@ class VS2010Toolset(VS201xToolsetBase):
     name = "vs2010"
 
     version = 10
+    msvs_version = "2010"
     proj_versions = [10]
     # don't set to "v100" because vs2010 doesn't explicitly set it by default:
     platform_toolset = None
@@ -643,6 +651,7 @@ class VS2012Toolset(VS201xToolsetBase):
     name = "vs2012"
 
     version = 11
+    msvs_version = "2012"
     proj_versions = [10, 11]
     platform_toolset = "v110"
     Solution = VS2012Solution
@@ -689,6 +698,7 @@ class VS2013Toolset(VS201xToolsetBase):
     name = "vs2013"
 
     version = 12
+    msvs_version = "2013"
     proj_versions = [10, 11, 12]
     platform_toolset = "v120"
     tools_version = "12.0"
@@ -738,6 +748,7 @@ class VS2015Toolset(VS201xToolsetBase):
     name = "vs2015"
 
     version = 14
+    msvs_version = "2015"
     proj_versions = [10, 11, 12, 14]
     platform_toolset = "v140"
     tools_version = "14.0"
@@ -785,8 +796,235 @@ class VS2017Toolset(VS201xToolsetBase):
     name = "vs2017"
 
     version = 15
+    msvs_version = "2017"
     proj_versions = [10, 11, 12, 14, 15]
     platform_toolset = "v141"
     tools_version = "15.0"
     Solution = VS2017Solution
     Project = VS2017Project
+
+
+class VS2019Solution(VS2010Solution):
+    format_version = "12.00"
+    human_version = "16"
+
+    def write_header(self, file):
+        super(VS2019Solution, self).write_header(file)
+        file.write("VisualStudioVersion = 16.0.29020.237\n")
+        file.write("MinimumVisualStudioVersion = 10.0.40219.1\n")
+
+
+class VS2019Project(VS2010Project):
+    version = 16
+
+
+class VS2019Toolset(VS201xToolsetBase):
+    """
+    Visual Studio 2019.
+
+
+    Special properties
+    ------------------
+    This toolset supports the same special properties that
+    :ref:`ref_toolset_vs2010`. The only difference is that they are prefixed
+    with ``vs2019.option.`` instead of ``vs2010.option.``, i.e. the nodes are:
+
+      - ``vs2019.option.Globals.*``
+      - ``vs2019.option.Configuration.*``
+      - ``vs2019.option.*`` (this is the unnamed ``PropertyGroup`` with
+        global settings such as ``TargetName``)
+      - ``vs2019.option.ClCompile.*``
+      - ``vs2019.option.ResourceCompile.*``
+      - ``vs2019.option.Link.*``
+      - ``vs2019.option.Lib.*``
+      - ``vs2019.option.Manifest.*``
+
+    """
+
+    name = "vs2019"
+
+    version = 16
+    msvs_version = "2019"
+    proj_versions = [10, 11, 12, 14, 15, 16]
+    platform_toolset = "v142"
+    tools_version = "16.0"
+    Solution = VS2019Solution
+    Project = VS2019Project
+
+
+all_versions = {
+        10: VS2010Toolset,
+        11: VS2012Toolset,
+        12: VS2013Toolset,
+        14: VS2015Toolset,
+        15: VS2017Toolset,
+        16: VS2019Toolset,
+    }
+
+class MSVSSolutionsBundle(object):
+    """
+    Representation of one or more MSVS solution files.
+
+    ``MSVSToolset`` can generate several solution files for different MSVS
+    versions, depending on which msvsNNNN.solutionfile options are specified.
+    """
+
+    def __init__(self, toolset, module):
+        self.solutions = {}
+        for v in all_versions:
+            toolset_ver = all_versions[v]
+            sln = module["%s%s.solutionfile" % (toolset.name, toolset_ver.msvs_version)]
+            if sln:
+                self.solutions[v] = toolset_ver.Solution(toolset, module, sln)
+
+        if not self.solutions:
+            # If no version-specific solutions are specified, create a
+            # version-independent solution file which will be opened by the
+            # latest installed version.
+            sln = module["%s.solutionfile" % toolset.name]
+            self.solutions[16] = VS2019Solution(toolset, module, sln)
+
+    def add_project(self, prj):
+        for s in self.solutions.values():
+            s.add_project(prj)
+
+    def add_subsolution(self, subsol):
+        for v in self.solutions:
+            if not v in subsol.solutions:
+                continue
+
+            self.solutions[v].add_subsolution(subsol.solutions[v])
+
+    def write(self):
+        for s in self.solutions.values():
+            s.write()
+
+
+class MSVSToolset(VS201xToolsetBase):
+    """
+    Any Microsoft Visual Studio version using MSBuild projects.
+
+    Files generated by this toolset can be used with any Microsoft Visual
+    Studio version from 2010 to 2019.
+
+
+    Special properties
+    ------------------
+
+    In addition to the properties described below, it's possible to specify any
+    of the ``vcxproj`` properties directly in a bakefile. To do so, you have to
+    set specially named variables on the target.
+
+    The variables are prefixed with ``msvs.option.``, followed by node name and
+    property name. The following nodes are supported:
+
+      - ``msvs.option.Globals.*``
+      - ``msvs.option.Configuration.*``
+      - ``msvs.option.*`` (this is the unnamed ``PropertyGroup`` with
+        global settings such as ``TargetName``)
+      - ``msvs.option.ClCompile.*``
+      - ``msvs.option.ResourceCompile.*``
+      - ``msvs.option.Link.*``
+      - ``msvs.option.Lib.*``
+      - ``msvs.option.Manifest.*``
+
+    These variables can be used in several places in bakefiles:
+
+      - In targets, to applied them as project's global settings.
+      - In modules, to apply them to all projects in the module and its submodules.
+      - On per-file basis, to modify file-specific settings.
+
+    Examples:
+
+    .. code-block:: bkl
+
+        msvs.option.GenerateManifest = false;
+        msvs.option.Link.CreateHotPatchableImage = Enabled;
+
+        crashrpt.cpp::msvs.option.ClCompile.ExceptionHandling = Async;
+    """
+
+    name = "msvs"
+
+    # There is no specific version associated with this toolset, it is
+    # determined by the version of MSVS used for actual building.
+    version = None
+
+    # This toolset is handled specially in VS201xToolsetBase, see there.
+    platform_toolset = 'msvs'
+
+    # This is used in VSToolsetBase to check for version compatibility.
+    proj_versions = all_versions.keys()
+
+    # This tools version is supported by MSVS 2010 and still works just fine
+    # for MSVS 2019.
+    tools_version = "4.0"
+
+    # We use a special multi-solution class, but just the same plain project
+    # class as all the other MSVS 201x toolsets.
+    Solution = MSVSSolutionsBundle
+    Project = VS2010Project
+
+    # Augment the base class method with version-dependent solution files
+    # properties: it may still make sense to have those even if the projects
+    # version-independent to make it possible to directly open the solution in
+    # the desired MSVS version (the version-independent solution file would be
+    # always opened in the latest installed one).
+    @classmethod
+    def properties_module(cls):
+        for p in super(cls, cls).properties_module():
+            yield p
+
+        for v in cls.proj_versions:
+            yield Property("%s%s.solutionfile" % (cls.name, all_versions[v].msvs_version),
+                           type=PathType(),
+                           default=bkl.expr.NullExpr(),
+                           inheritable=False,
+                           doc="""
+                               File name of the solution file for the specified version.
+
+                               If any of versioned solution file properties are specified,
+                               the version-independent solution file generated by default
+                               is not generated, as if ``msvs.generate-solution`` were set
+                               to ``false``.
+                               """)
+
+    @classmethod
+    def get_solutionfile_path(cls, module):
+        # Choose the first solution file path, but check that any other ones
+        # that are specified are consistent with it.
+        slnpath = None
+
+        # Consider both version-specific and version-independent solutions here.
+        for ver_str in [''] + [all_versions[v].msvs_version for v in all_versions]:
+            slnprop = "%s%s.solutionfile" % (cls.name, ver_str)
+
+            if not module.is_variable_explicitly_set(slnprop):
+                continue
+
+            slnpath2 = module[slnprop]
+            if not slnpath2:
+                continue
+
+            if slnpath is None:
+                slnpath = slnpath2
+                continue
+
+            if slnpath.components[:-1] != slnpath2.components[:-1] or \
+                   slnpath.anchor != slnpath2.anchor or \
+                       slnpath.anchor_file != slnpath2.anchor_file:
+               raise Error(("can't deduce default project path " +
+                            "(solution files \"%s\" and \"%s\" don't use " +
+                            "the same path), specify it explicitly") %
+                           (slnpath, slnpath2))
+
+        if slnpath is None:
+            # If no solution file paths are specified, just use the default.
+            slnpath = bkl.expr.PathExpr([bkl.expr.LiteralExpr(module.name + ".sln")])
+
+        return slnpath
+
+    # Override base class method to create our solution in a different way
+    # because we may have more than one of them.
+    def create_solution(self, module):
+        return self.Solution(self, module)

@@ -38,6 +38,7 @@ from bkl.error import Error
 
 # GCC flags for supported architectures:
 OSX_ARCH_FLAGS = {
+    'arm64'  : '-arch arm64',
     'x86'    : '-arch i386',
     'x86_64' : '-arch x86_64',
 }
@@ -211,18 +212,40 @@ class GnuLinker(GnuFileCompiler):
         return cmd
 
 
-    def _make_link_command(self, toolset, target, input, output_flags=None, extra_flags=None):
+    def _make_link_commands(self, toolset, target, input, output_flags=None, extra_flags=None):
         """
-        Return the link command taking the specified inputs.
+        Return the list containing the link command taking the specified inputs.
 
         The output_flags argument contains linker flags controlling the kind of
         output file to generate while extra_flags contain other options. This
         separation is relatively arbitrary and just makes the code using this
         function more convenient to write.
+
+        Notice that if output_flags is specified, we also automatically append
+        the necessary linked flags to allow, or disallow, undefined symbols in
+        output. This is again just a convenience, as this is only needed by those
+        callers of this function that use output_flags.
+
+        Finally, if the target defines a custom value of the outputdir
+        property, the list of commands returned by this function also contains
+        a command to create the output directory, as it might not exist yet,
+        but must in order for the linker to succeed (note that this is done
+        only here as compiler commands generate files in the build directory,
+        which is global and is created at the top of the makefile, but output
+        directories are per target and so can't be handled in the same way).
         """
         cmd = [LiteralExpr("$(CXX)")]
         if output_flags:
             cmd.append(LiteralExpr(output_flags))
+
+            if target["allow-undefined"]:
+                undefined_link_flag = toolset.allow_undefined_link_flag
+            else:
+                undefined_link_flag = toolset.disallow_undefined_link_flag
+
+            if undefined_link_flag:
+                cmd.append(LiteralExpr(undefined_link_flag))
+
         cmd.append(LiteralExpr("-o $@"))
         if extra_flags:
             cmd.append(LiteralExpr(extra_flags))
@@ -231,10 +254,15 @@ class GnuLinker(GnuFileCompiler):
         # FIXME: use a parser instead of constructing the expression manually
         #        in here
         cmd += self._linker_flags(toolset, target)
-        return [ListExpr(cmd)]
+        cmds = [ListExpr(cmd)]
+
+        if target.is_variable_explicitly_set("outputdir"):
+            cmds.insert(0, LiteralExpr("@mkdir -p $(dir $@)"))
+
+        return cmds
 
     def commands(self, toolset, target, input, output):
-        return self._make_link_command(toolset, target, input)
+        return self._make_link_commands(toolset, target, input)
 
 
 class GnuSharedLibLinker(GnuLinker):
@@ -246,9 +274,9 @@ class GnuSharedLibLinker(GnuLinker):
     out_type = bkl.compilers.NativeSharedLibraryFileType.get()
 
     def commands(self, toolset, target, input, output):
-        return self._make_link_command(toolset, target, input,
-                                       toolset.shared_library_link_flag,
-                                       toolset.soname_flags)
+        return self._make_link_commands(toolset, target, input,
+                                        toolset.shared_library_link_flag,
+                                        toolset.soname_flags)
 
 
 class GnuLoadableModuleLinker(GnuLinker):
@@ -260,8 +288,8 @@ class GnuLoadableModuleLinker(GnuLinker):
     out_type = bkl.compilers.NativeLoadableModuleFileType.get()
 
     def commands(self, toolset, target, input, output):
-        return self._make_link_command(toolset, target, input,
-                                       toolset.loadable_module_link_flag)
+        return self._make_link_commands(toolset, target, input,
+                                        toolset.loadable_module_link_flag)
 
 
 class GnuLibLinker(GnuFileCompiler):
@@ -273,10 +301,7 @@ class GnuLibLinker(GnuFileCompiler):
     out_type = bkl.compilers.NativeLibFileType.get()
 
     def commands(self, toolset, target, input, output):
-        # FIXME: use a parser instead of constructing the expression manually
-        #        in here
-        return [ListExpr([LiteralExpr("$(AR) rc $@"), input]),
-                ListExpr([LiteralExpr("$(RANLIB) $@")])]
+        return toolset.make_archiver_commands(input)
 
 
 class GnuMakefileFormatter(MakefileFormatter):
@@ -394,14 +419,17 @@ class GnuToolset(MakefileToolset):
 
     object_type = GnuObjectFileType.get()
 
+    allow_undefined_link_flag = "" # This is the default
+    disallow_undefined_link_flag = "-Wl,-z,defs"
+
     library_prefix = "lib"
     library_extension = "a"
     shared_library_prefix = "lib"
     shared_library_extension = "so"
-    shared_library_link_flag = "-shared -Wl,-z,defs"
+    shared_library_link_flag = "-shared"
     loadable_module_prefix = ""
     loadable_module_extension = "so"
-    loadable_module_link_flag = "-shared -Wl,-z,defs"
+    loadable_module_link_flag = "-shared"
 
     deps_flags = GCC_DEPS_FLAGS
     pic_flags = "-fPIC -DPIC"
@@ -490,6 +518,19 @@ endif
     def on_header(self, file, module):
         super(GnuToolset, self).on_header(file, module)
 
+        make_variables = [
+            'CC',
+            'CFLAGS',
+            'CPPFLAGS',
+            'CXX',
+            'CXXFLAGS',
+            'LD',
+            'LDFLAGS',
+            'MAKE',
+        ]
+
+        archiver_definition = self._get_archiver_definition(make_variables)
+
         file.write("""
 # You may define standard make variables such as CFLAGS or
 # CXXFLAGS to affect the build. For example, you could use:
@@ -498,8 +539,8 @@ endif
 #
 # to build with debug information. The full list of variables
 # that can be used by this makefile is:
-# AR, CC, CFLAGS, CPPFLAGS, CXX, CXXFLAGS, LD, LDFLAGS, MAKE, RANLIB.
-""")
+# %s.
+""" % ', '.join(sorted(make_variables)))
 
         self.output_default_flags(file, module.project.configurations)
 
@@ -515,13 +556,11 @@ endif
             for name, doc in alls:
                 file.write(fmtstr % (name, doc if doc else ""))
 
-        file.write("""
-# Use \"make RANLIB=''\" for platforms without ranlib.
-RANLIB ?= ranlib
-
+        file.write("""%s
 CC := %s
 CXX := %s
-""" % (self.default_cc, self.default_cxx))
+""" % (archiver_definition, self.default_cc, self.default_cxx))
+
         # This placeholder will be replaced either with the definition of the
         # macros, if they turn out to be really needed, or nothing otherwise.
         file.write(GMAKE_IFEXPR_MACROS_PLACEHOLDER)
@@ -534,6 +573,34 @@ CXX := %s
         # to clutter them).
         file.write(GMAKE_BUILDDIR_DEF_PLACEHOLDER)
 
+
+    def _get_archiver_definition(self, make_variables):
+        """
+        Return the definition of the variable, or variables, used for
+        creating static libraries and add the names of these variables
+        to make_variables.
+        """
+
+        # Base class version uses classic ar and ranlib utilitiles.
+        make_variables.append('AR')
+        make_variables.append('RANLIB')
+
+        # Note that AR is predefined by GNU make.
+        return """
+# Use \"make RANLIB=''\" for platforms without ranlib.
+RANLIB ?= ranlib
+"""
+
+    def make_archiver_commands(self, input):
+        """
+        Return the commands needed to create a static archive from the given
+        input.
+        """
+
+        # FIXME: use a parser instead of constructing the expression manually
+        #        in here
+        return [ListExpr([LiteralExpr("$(AR) rc $@"), input]),
+                ListExpr([LiteralExpr("$(RANLIB) $@")])]
 
     def _get_builddir_fragment(self, module):
         # Build the value actually representing the build directory, it is
@@ -609,9 +676,10 @@ class OSXGnuToolset(GnuToolset):
 
     default_makefile = "Makefile.osx"
 
+    allow_undefined_link_flag = "-undefined dynamic_lookup"
+    disallow_undefined_link_flag = "" # This is the default
+
     shared_library_extension = "dylib"
-    # "-z defs" is not supported by OS X linker, the corresponding option is
-    # "-undefined error" but it is the default anyhow
     shared_library_link_flag = "-shared"
     loadable_module_extension = "bundle"
     loadable_module_link_flag = "-bundle"
@@ -619,6 +687,19 @@ class OSXGnuToolset(GnuToolset):
     pic_flags = None
     soname_flags = "-install_name @rpath/$(notdir $@)"
     pthread_ld_flags = None
+
+    def _get_archiver_definition(self, make_variables):
+        make_variables.append('LIBTOOL')
+
+        return """
+# Note: This must be macOS libtool and not GNU libtool.
+LIBTOOL ?= libtool
+"""
+
+    def make_archiver_commands(self, input):
+        # FIXME: use a parser instead of constructing the expression manually
+        #        in here
+        return [ListExpr([LiteralExpr("$(LIBTOOL) -static -o $@"), input])]
 
     def on_footer(self, file, module):
         for t in module.targets.itervalues():
@@ -649,7 +730,10 @@ class SunCCGnuToolset(GnuToolset):
     # (and as we can't know whether it is or not, it is better to always
     # include it ending up with an unused library rather than not include it
     # and ending up with broken build).
-    shared_library_link_flag  = "-G -Kpic -z defs -lm -lc"
+    allow_undefined_link_flag = ""
+    disallow_undefined_link_flag = "-z defs -lm -lc"
+
+    shared_library_link_flag  = "-G -Kpic"
     loadable_module_link_flag = shared_library_link_flag
 
     deps_flags = "-xMD"
